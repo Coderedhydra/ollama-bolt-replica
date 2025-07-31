@@ -1,7 +1,7 @@
-import { EnhancedBoltClone } from '@/components/EnhancedBoltClone';
+import { BoltDiyClone } from "@/components/BoltDiyClone";
 
 const Index = () => {
-  return <EnhancedBoltClone />;
+  return <BoltDiyClone />;
 };
 
 export default Index;
