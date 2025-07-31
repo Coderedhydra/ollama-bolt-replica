@@ -48,9 +48,9 @@ export class OllamaService {
 
   constructor(
     baseUrl: string = 'http://localhost:11434',
-    timeout: number = 30000,
-    retryAttempts: number = 3,
-    retryDelay: number = 1000
+    timeout: number = 60000, // Increased to 60 seconds
+    retryAttempts: number = 2, // Reduced retries to avoid long waits
+    retryDelay: number = 2000 // Increased delay between retries
   ) {
     this.baseUrl = baseUrl;
     this.timeout = timeout;
@@ -152,6 +152,7 @@ export class OllamaService {
             options: {
               temperature: 0.7,
               top_p: 0.9,
+              num_predict: 4096, // Limit response length
             }
           },
           {
@@ -159,6 +160,7 @@ export class OllamaService {
             headers: {
               'Content-Type': 'application/json',
             },
+            validateStatus: (status) => status < 500, // Don't throw on 4xx errors
           }
         );
 
@@ -173,7 +175,7 @@ export class OllamaService {
           
           if (axiosError.response?.status === 404) {
             throw new OllamaModelError(
-              `Model "${model}" not found. Please pull the model first.`,
+              `Model "${model}" not found. Please pull the model first with: ollama pull ${model}`,
               model
             );
           }
@@ -184,7 +186,13 @@ export class OllamaService {
           
           if (error.code === 'ECONNREFUSED') {
             throw new OllamaConnectionError(
-              'Cannot connect to Ollama. Make sure Ollama is running on ' + this.baseUrl
+              'Cannot connect to Ollama. Make sure Ollama is running with: ollama serve'
+            );
+          }
+          
+          if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
+            throw new OllamaConnectionError(
+              `Request timeout after ${this.timeout/1000}s. The model might be too large or your system is slow. Try a smaller model like llama3.2:1b`
             );
           }
         }
@@ -288,15 +296,56 @@ export class OllamaService {
 
   async isAvailable(): Promise<boolean> {
     try {
-      await axios.get(`${this.baseUrl}/api/tags`, {
-        timeout: 5000,
+      const response = await axios.get(`${this.baseUrl}/api/tags`, {
+        timeout: 10000, // Increased timeout for availability check
         headers: {
           'Content-Type': 'application/json',
         }
       });
-      return true;
-    } catch {
+      return response.status === 200;
+    } catch (error) {
+      console.warn('Ollama availability check failed:', error);
       return false;
+    }
+  }
+
+  async getConnectionStatus(): Promise<{ 
+    available: boolean; 
+    error?: string; 
+    models?: number;
+    latency?: number;
+  }> {
+    const startTime = Date.now();
+    try {
+      const response = await axios.get(`${this.baseUrl}/api/tags`, {
+        timeout: 8000,
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      });
+      const latency = Date.now() - startTime;
+      const models = response.data?.models?.length || 0;
+      
+      return { 
+        available: true, 
+        models,
+        latency
+      };
+    } catch (error) {
+      let errorMessage = 'Unknown error';
+      if (axios.isAxiosError(error)) {
+        if (error.code === 'ECONNREFUSED') {
+          errorMessage = 'Connection refused - Ollama not running';
+        } else if (error.code === 'ECONNABORTED') {
+          errorMessage = 'Connection timeout';
+        } else if (error.response?.status) {
+          errorMessage = `HTTP ${error.response.status}`;
+        }
+      }
+      return { 
+        available: false, 
+        error: errorMessage 
+      };
     }
   }
 
